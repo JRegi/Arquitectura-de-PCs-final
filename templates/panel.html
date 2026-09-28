@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Control de acceso RFID</title>
+  <style>
+    :root { color-scheme: dark; font-family: system-ui, sans-serif; background:#101318; color:#edf1f7; }
+    body { max-width:1100px; margin:auto; padding:24px; }
+    h1,h2 { margin:.3em 0; } .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:12px; margin:20px 0; }
+    .card, form, table { background:#1a2029; border:1px solid #303a49; border-radius:10px; }
+    .card { padding:16px; } .label { color:#9aa7b8; font-size:.85rem; } .value { font-size:1.3rem; font-weight:700; margin-top:5px; }
+    .ok { color:#76d39b; } .bad { color:#ff8d8d; } .flash { padding:10px; margin:10px 0; border-radius:8px; background:#253044; }
+    form { padding:12px; } input,select,button { padding:9px; border-radius:6px; border:1px solid #48566a; background:#11161d; color:#edf1f7; }
+    button { cursor:pointer; background:#2962a8; } button.danger { background:#993d3d; } .inline { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    .aviso-cambio { flex-basis:100%; grid-column:1/-1; margin:4px 0; } .pendiente { color:#ffd37a; } .error { color:#ff8d8d; } button:disabled { opacity:.55; cursor:wait; }
+    .secuencia { margin:20px 0; padding:22px; }
+    .secuencia h3 { margin:0 0 18px; font-size:1.18rem; }
+    .secuencia form { border:0; background:none; padding:0; }
+    .secuencia-form { display:grid; gap:20px; }
+    .secuencia-ayuda { color:#aebacc; line-height:1.5; max-width:900px; }
+    .secuencia-campo { display:grid; gap:7px; min-width:0; }
+    .secuencia-campo > span { color:#b6c6dc; font-size:.9rem; font-weight:600; }
+    .secuencia-campo input, .secuencia-campo select { box-sizing:border-box; width:100%; min-width:0; }
+    .secuencia-nombre { max-width:480px; }
+    .pasos { display:grid; gap:12px; }
+    .paso { display:grid; grid-template-columns:38px minmax(210px,1fr) auto; gap:12px; align-items:end; padding:16px; border:1px solid #344155; border-radius:9px; background:#141b25; }
+    .numero-paso { display:grid; place-items:center; width:36px; height:36px; border-radius:50%; background:#29496c; color:#fff; font-weight:700; }
+    .secuencia-acciones { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+    button.secundario { background:#25364a; }
+    .secuencia-aviso { margin:0; min-height:1.3em; color:#ffd37a; }
+    .secuencia-eliminar { margin-top:18px; padding-top:16px !important; border-top:1px solid #344155 !important; }
+    table { width:100%; border-collapse:collapse; overflow:hidden; margin-top:12px; } th,td { padding:10px; border-bottom:1px solid #303a49; text-align:left; }
+    td form { border:0; padding:0; background:none; } .edit { display:grid; grid-template-columns:1fr 1.2fr auto auto; gap:6px; }
+    @media(max-width:700px){ table,thead,tbody,tr,td { display:block; } th { display:none; } tr { padding:12px; border-bottom:1px solid #303a49; } td { border:0; padding:5px; } .edit { grid-template-columns:1fr; } .secuencia { padding:16px; } .paso { grid-template-columns:38px minmax(0,1fr); } .paso .secuencia-campo, .paso .quitar-paso { grid-column:2; } .paso .quitar-paso { justify-self:start; } }
+  </style>
+</head>
+<body>
+  <h1>Control de acceso RFID</h1>
+  <div class="grid">
+    <div class="card"><div class="label">Puerta</div><div id="puerta" class="value">{{ estado.puerta }}</div></div>
+    <div class="card"><div class="label">Lector RFID</div><div id="lector" class="value">{{ 'ACTIVO' if estado.lector_activo else 'INACTIVO' }}</div></div>
+    <div class="card"><div class="label">Tarjeta detectada</div><div id="detectando" class="value">{{ 'SÍ' if estado.tarjeta_detectada else 'NO' }}</div></div>
+    <div class="card"><div class="label">Modo actual</div><div id="modo-actual" class="value">{{ 'ACCESO' if modo == 'ACCESO' else 'COMBINACIÓN' }}</div></div>
+    <div class="card"><div class="label">Cierre de puerta</div><div id="cuenta-puerta" class="value">{{ (estado.puerta_restante_s|string) ~ ' s' if estado.puerta == 'ABIERTA' else 'Cerrada' }}</div></div>
+    <div class="card"><div class="label">Bloqueo por intentos</div><div id="cuenta-bloqueo" class="value">{{ (estado.bloqueo_restante_s|string) ~ ' s · bloqueado' if estado.bloqueo_restante_s else (estado.fallos_consecutivos|string) ~ '/3 fallos' }}</div></div>
+  </div>
+  <div class="card"><span class="label">Último evento:</span> <span id="ultimo">{{ estado.ultimo_resultado }}{% if estado.ultimo_uid %} · {{ estado.ultimo_uid }}{% endif %}</span></div>
+  {% for categoria,mensaje in get_flashed_messages(with_categories=true) %}<div class="flash {{ categoria }}">{{ mensaje }}</div>{% endfor %}
+
+  <p><a href="{{ url_for('diagrama') }}">Ver diagrama de funcionamiento y procesos →</a></p>
+  <h2>Modo de funcionamiento</h2>
+  <p class="secuencia-ayuda">Acceso: cualquier tarjeta habilitada abre una vez y se ignoran otras lecturas hasta cerrar. Combinación: solo abre al completar una secuencia; las tarjetas intermedias no mueven el servo ni muestran avance. Cambiar de modo cancela una combinación pendiente y cierra una apertura en curso.</p>
+  <form method="post" action="{{ url_for('cambiar_modo') }}" class="inline" data-aviso-cambios>
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="modo-control">Modo</label>
+    <select id="modo-control" name="modo"><option value="ACCESO" {% if modo == 'ACCESO' %}selected{% endif %}>Acceso</option><option value="COMBINACION" {% if modo == 'COMBINACION' %}selected{% endif %}>Combinación</option></select>
+    <button type="submit">Aplicar modo</button>
+  </form>
+  <h2>Tiempo de apertura y espera</h2>
+  <form method="post" action="{{ url_for('cambiar_tiempo') }}" class="inline" data-aviso-cambios>
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label for="tiempo-segundos">Segundos</label>
+    <input id="tiempo-segundos" type="number" name="segundos" min="2" max="60" step="0.1" value="{{ ventana_secuencia_s }}" required>
+    <button type="submit">Guardar tiempo</button>
+  </form>
+  <p class="label">Este mismo tiempo controla el cierre del servo y la espera del siguiente código en una secuencia. El cambio se aplica desde la próxima lectura y queda guardado al reiniciar.</p>
+
+  <h2>Alta de RFID</h2>
+  <form id="alta-rfid" method="post" action="{{ url_for('alta') }}" class="inline">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input name="nombre" maxlength="80" placeholder="Nombre" required>
+    <input id="uid-alta" name="uid" placeholder="AA-BB-CC-DD" aria-label="UID de la nueva tarjeta" required>
+    <button id="leer-tarjeta" type="button">Leer tarjeta con el sensor</button>
+    <button id="cancelar-lectura" type="button" hidden>Cancelar lectura</button>
+    <select name="habilitada"><option value="1">Habilitada</option><option value="0">Deshabilitada</option></select>
+    <button type="submit">Agregar</button>
+  </form>
+  <p id="estado-lectura" role="status" aria-live="polite">Podés escribir el UID o leerlo acercando la tarjeta al RC522. Después completá el nombre y pulsá Agregar.</p>
+
+  <h2>Padrón</h2>
+  <table><thead><tr><th>Nombre y UID</th><th>Estado</th><th>Acciones</th></tr></thead><tbody>
+  {% for tarjeta in tarjetas %}<tr>
+    <td colspan="2"><form method="post" action="{{ url_for('editar', identificador=tarjeta.id) }}" class="edit" data-aviso-cambios>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input name="nombre" maxlength="80" value="{{ tarjeta.nombre }}" required>
+      <input name="uid" value="{{ tarjeta.uid }}" required>
+      <select name="habilitada"><option value="1" {% if tarjeta.habilitada %}selected{% endif %}>Habilitada</option><option value="0" {% if not tarjeta.habilitada %}selected{% endif %}>Deshabilitada</option></select>
+      <button type="submit">Guardar</button>
+    </form></td>
+    <td><form method="post" action="{{ url_for('eliminar', identificador=tarjeta.id) }}" onsubmit="return confirm('¿Eliminar este RFID?')"><input type="hidden" name="csrf" value="{{ csrf }}"><button class="danger" type="submit">Eliminar</button></form></td>
+  </tr>{% else %}<tr><td colspan="3">No hay RFID registrados.</td></tr>{% endfor %}
+  </tbody></table>
+
+  <h2>Secuencias RFID</h2>
+  <p class="secuencia-ayuda">Ordená entre 2 y 8 tarjetas y elegí una palabra final. Las secuencias funcionan solo en modo combinación. El servo permanece cerrado y no se muestra el avance hasta completar el último paso; entonces se abre y aparece la palabra. Retirá cada tarjeta antes de presentar la siguiente: tenés <span id="ventana-secuencia">{{ ventana_secuencia_s }}</span> segundos entre pasos. Una tarjeta deshabilitada aparece en la lista, pero tenés que habilitarla en el Padrón para poder usarla.</p>
+  {% macro opciones_tarjetas(seleccionada=none) %}
+    {% for tarjeta in tarjetas %}<option value="{{ tarjeta.id }}" data-habilitada="{{ 1 if tarjeta.habilitada else 0 }}" {% if tarjeta.id == seleccionada %}selected{% endif %}>{{ tarjeta.nombre }} · {{ tarjeta.uid }}{% if not tarjeta.habilitada %} · deshabilitada{% endif %}</option>{% endfor %}
+  {% endmacro %}
+  <template id="modelo-paso"><div class="paso">
+    <span class="numero-paso"></span>
+    <label class="secuencia-campo"><span>Tarjeta RFID</span><select name="tarjeta_id" required>{{ opciones_tarjetas() }}</select></label>
+    <button type="button" class="quitar-paso danger">Quitar paso</button>
+  </div></template>
+  <section class="card secuencia">
+    <h3>Nueva secuencia</h3>
+    <form class="secuencia-form" method="post" action="{{ url_for('crear_secuencia') }}" data-secuencia>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="secuencia-campo secuencia-nombre"><span>Nombre de la secuencia</span><input name="nombre" maxlength="80" placeholder="Ej.: Entrada principal" required></label>
+      <label class="secuencia-campo secuencia-nombre"><span>Palabra al completar</span><input name="palabra_final" maxlength="16" pattern="[ -~]+" placeholder="Ej.: BIENVENIDO" required></label>
+      <div class="pasos"></div>
+      <div class="secuencia-acciones"><button type="button" class="sumar-paso secundario">+ Añadir paso</button><button type="button" class="actualizar-tarjetas secundario">Actualizar tarjetas</button><button type="submit">Crear secuencia</button></div>
+      <p class="secuencia-aviso" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+  {% for secuencia in secuencias %}
+  <section class="card secuencia"><h3>{{ secuencia.nombre }}</h3>
+    <form class="secuencia-form" method="post" action="{{ url_for('editar_secuencia', identificador=secuencia.id) }}" data-secuencia>
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="secuencia-campo secuencia-nombre"><span>Nombre de la secuencia</span><input name="nombre" maxlength="80" value="{{ secuencia.nombre }}" required></label>
+      <label class="secuencia-campo secuencia-nombre"><span>Palabra al completar</span><input name="palabra_final" maxlength="16" pattern="[ -~]+" value="{{ secuencia.palabra_final }}" required></label>
+      <div class="pasos">
+      {% for paso in secuencia.pasos %}<div class="paso">
+        <span class="numero-paso">{{ loop.index }}</span>
+        <label class="secuencia-campo"><span>Tarjeta RFID</span><select name="tarjeta_id" required>{{ opciones_tarjetas(paso.tarjeta_id) }}</select></label>
+        <button type="button" class="quitar-paso danger">Quitar paso</button>
+      </div>{% endfor %}
+      </div>
+      <div class="secuencia-acciones"><button type="button" class="sumar-paso secundario">+ Añadir paso</button><button type="button" class="actualizar-tarjetas secundario">Actualizar tarjetas</button><button type="submit">Guardar secuencia</button></div>
+      <p class="secuencia-aviso" role="status" aria-live="polite"></p>
+    </form>
+    <form class="secuencia-eliminar" method="post" action="{{ url_for('eliminar_secuencia', identificador=secuencia.id) }}" onsubmit="return confirm('¿Eliminar esta secuencia?')"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit" class="danger">Eliminar secuencia</button></form>
+  </section>
+  {% else %}<p>No hay secuencias configuradas.</p>{% endfor %}
+  <script>
+    function revisarSecuencia(formulario){
+      const pasos=[...formulario.querySelectorAll('.paso')];
+      const deshabilitada=pasos.some(paso=>paso.querySelector('select').selectedOptions[0]?.dataset.habilitada==='0');
+      const vacia=pasos.some(paso=>!paso.querySelector('select').value);
+      const aviso=formulario.querySelector('.secuencia-aviso');
+      if(vacia)aviso.textContent='Primero agregá una tarjeta al Padrón.';
+      else if(deshabilitada)aviso.textContent='Una tarjeta elegida está deshabilitada. Habilitala en el Padrón y pulsá «Actualizar tarjetas».';
+      else aviso.textContent='';
+      formulario.querySelector('button[type="submit"]').disabled=vacia||deshabilitada;
+      formulario.querySelector('.sumar-paso').disabled=pasos.length>=8;
+      formulario.querySelectorAll('.quitar-paso').forEach(boton=>boton.disabled=pasos.length<=2);
+    }
+    async function actualizarTarjetasSecuencia(){
+      const respuesta=await fetch('/api/tarjetas',{cache:'no-store',signal:AbortSignal.timeout(8000)});
+      if(!respuesta.ok)throw new Error('No se pudo actualizar la lista de tarjetas.');
+      const tarjetas=await respuesta.json();
+      const modelo=document.querySelector('#modelo-paso').content.querySelector('select');
+      for(const selector of [modelo,...document.querySelectorAll('[data-secuencia] select[name="tarjeta_id"]')]){
+        const elegido=selector.value;
+        selector.replaceChildren(...tarjetas.map(tarjeta=>{
+          const opcion=document.createElement('option');
+          opcion.value=String(tarjeta.id);
+          opcion.dataset.habilitada=tarjeta.habilitada?'1':'0';
+          opcion.textContent=tarjeta.nombre+' · '+tarjeta.uid+(tarjeta.habilitada?'':' · deshabilitada');
+          return opcion;
+        }));
+        if(elegido && tarjetas.some(tarjeta=>String(tarjeta.id)===elegido))selector.value=elegido;
+        else if(elegido){const opcion=document.createElement('option');opcion.value=elegido;opcion.dataset.habilitada='0';opcion.textContent='Tarjeta eliminada · '+elegido;selector.append(opcion);selector.value=elegido;}
+        else selector.value=String(tarjetas.find(tarjeta=>tarjeta.habilitada)?.id||tarjetas[0]?.id||'');
+      }
+      document.querySelectorAll('[data-secuencia]').forEach(revisarSecuencia);
+    }
+    document.querySelectorAll('[data-secuencia]').forEach(formulario=>{
+      const pasos=formulario.querySelector('.pasos');
+      function numerar(){pasos.querySelectorAll('.numero-paso').forEach((n,i)=>n.textContent=String(i+1));}
+      function agregar(){
+        if(pasos.children.length>=8)return;
+        const elegidas=new Set([...pasos.querySelectorAll('select')].map(selector=>selector.value));
+        const clon=document.querySelector('#modelo-paso').content.cloneNode(true);
+        const selector=clon.querySelector('select');
+        const disponibles=[...selector.options].filter(opcion=>opcion.dataset.habilitada==='1');
+        selector.value=(disponibles.find(opcion=>!elegidas.has(opcion.value))||disponibles[0]||selector.options[0])?.value||'';
+        pasos.append(clon);numerar();revisarSecuencia(formulario);
+      }
+      formulario.querySelector('.sumar-paso').addEventListener('click',agregar);
+      formulario.querySelector('.actualizar-tarjetas').addEventListener('click',async()=>{
+        try{await actualizarTarjetasSecuencia();}
+        catch(error){formulario.querySelector('.secuencia-aviso').textContent=error.message;}
+      });
+      pasos.addEventListener('click',evento=>{if(evento.target.classList.contains('quitar-paso')){if(pasos.children.length<=2)return;evento.target.closest('.paso').remove();numerar();revisarSecuencia(formulario);}});
+      pasos.addEventListener('change',()=>revisarSecuencia(formulario));
+      formulario.addEventListener('submit',evento=>{if(pasos.children.length<2||pasos.children.length>8){evento.preventDefault();formulario.querySelector('.secuencia-aviso').textContent='La secuencia debe tener entre 2 y 8 pasos.';}});
+      if(!pasos.children.length){agregar();agregar();}else revisarSecuencia(formulario);
+    });
+    document.querySelectorAll('[data-aviso-cambios]').forEach(formulario=>{
+      const aviso=document.createElement('p');
+      aviso.className='aviso-cambio label';aviso.setAttribute('role','status');aviso.setAttribute('aria-live','polite');
+      aviso.textContent='Sin cambios pendientes.';formulario.append(aviso);
+      const valores=()=>new URLSearchParams(new FormData(formulario)).toString();
+      let guardado=valores();
+      function avisar(texto,clase){aviso.textContent=texto;aviso.className='aviso-cambio '+clase;}
+      formulario.addEventListener('input',()=>avisar(valores()===guardado?'Sin cambios pendientes.':'Cambios pendientes: todavía no se aplicaron. Pulsá '+formulario.querySelector('button[type="submit"]').textContent+'.',valores()===guardado?'label':'pendiente'));
+      formulario.addEventListener('submit',async evento=>{
+        evento.preventDefault();
+        const cuerpo=new URLSearchParams(new FormData(formulario));
+        const campos=[...formulario.querySelectorAll('input,select,button')];
+        campos.forEach(campo=>campo.disabled=true);avisar('Aplicando cambios…','pendiente');
+        try{
+          const respuesta=await fetch(formulario.action,{method:'POST',body:cuerpo,headers:{Accept:'application/json'},signal:AbortSignal.timeout(8000)});
+          if(!(respuesta.headers.get('content-type')||'').includes('application/json'))throw new Error('No se pudo confirmar el cambio. Recargá la página para comprobar el estado e intentá nuevamente.');
+          const resultado=await respuesta.json();
+          if(respuesta.ok&&resultado.aplicado){guardado=cuerpo.toString();avisar(resultado.mensaje,'ok');if(formulario.classList.contains('edit'))actualizarTarjetasSecuencia().catch(()=>{});}
+          else avisar(resultado.mensaje||'Cambios no aplicados. Intentá nuevamente.','error');
+        }catch(error){avisar('No se pudo confirmar si los cambios se aplicaron. Revisá la conexión y recargá la página para comprobar el estado.','error');}
+        finally{campos.forEach(campo=>campo.disabled=false);}
+      });
+    });
+    let capturaId = null;
+    let consultando = false;
+    const leerBoton = document.querySelector('#leer-tarjeta');
+    const cancelarBoton = document.querySelector('#cancelar-lectura');
+    const estadoLectura = document.querySelector('#estado-lectura');
+    const uidAlta = document.querySelector('#uid-alta');
+    const agregarBoton = document.querySelector('#alta-rfid button[type="submit"]');
+    function marcarLectura(activa){leerBoton.disabled=activa;cancelarBoton.hidden=!activa;uidAlta.readOnly=activa;agregarBoton.disabled=activa;}
+    async function solicitar(url, datos={}){
+      const cuerpo = new URLSearchParams({csrf:document.querySelector('#alta-rfid input[name="csrf"]').value,...datos});
+      const respuesta = await fetch(url,{method:'POST',body:cuerpo,signal:AbortSignal.timeout(8000)});
+      if(!respuesta.ok){let mensaje='No se pudo completar la solicitud. Recargá la página e intentá de nuevo.';
+        try{mensaje=(await respuesta.json()).error||mensaje;}catch(_){} throw new Error(mensaje);}
+      return respuesta.json();
+    }
+    leerBoton.addEventListener('click',async()=>{
+      marcarLectura(true);estadoLectura.textContent='Iniciando lectura…';
+      try{const captura=await solicitar('/api/captura');capturaId=captura.id;uidAlta.value='';
+        estadoLectura.textContent='Acercá una sola tarjeta al RC522. Tenés 30 segundos; esta lectura no abre el servo.';
+      }catch(error){capturaId=null;marcarLectura(false);estadoLectura.textContent=error.message+' Si la solicitud llegó al lector, vencerá sola en 30 segundos.';}
+    });
+    cancelarBoton.addEventListener('click',async()=>{
+      if(!capturaId)return;
+      try{await solicitar('/api/captura/cancelar',{id:capturaId});capturaId=null;marcarLectura(false);estadoLectura.textContent='Lectura finalizada. Retirá la tarjeta antes de probar un acceso.';}
+      catch(error){estadoLectura.textContent=error.message;}
+    });
+    function mostrarCaptura(captura){
+      if(!capturaId)return;
+      if(captura.id!==capturaId){capturaId=null;marcarLectura(false);estadoLectura.textContent='La lectura cambió desde otra página o el servicio se reinició. Volvé a iniciarla.';return;}
+      if(captura.estado==='ESPERANDO'){estadoLectura.textContent='Acercá una sola tarjeta al RC522. Tenés 30 segundos; esta lectura no abre el servo.';return;}
+      capturaId=null;marcarLectura(false);
+      if(captura.estado==='LEIDA'){
+        uidAlta.value=captura.uid;
+        estadoLectura.textContent='UID leído: '+captura.uid+'. Retirá la tarjeta, completá el nombre y pulsá Agregar para guardarla.';
+        document.querySelector('#alta-rfid input[name="nombre"]').focus();
+      }else{estadoLectura.textContent=captura.estado==='VENCIDA'?'No se detectó una tarjeta en 30 segundos. Podés volver a intentar.':'Lectura cancelada.';}
+    }
+    async function actualizar(){if(consultando)return;consultando=true;const idAlSolicitar=capturaId;try{const r=await fetch('/api/estado',{cache:'no-store',signal:AbortSignal.timeout(8000)});if(!r.ok)throw new Error('Sin conexión');const e=await r.json();
+      document.querySelector('#puerta').textContent=e.puerta; document.querySelector('#lector').textContent=e.lector_activo?'ACTIVO':'INACTIVO';
+      document.querySelector('#detectando').textContent=e.tarjeta_detectada?'SÍ':'NO'; document.querySelector('#modo-actual').textContent=e.modo==='COMBINACION'?'COMBINACIÓN':'ACCESO';
+      document.querySelector('#cuenta-puerta').textContent=e.puerta==='ABIERTA'?e.puerta_restante_s+' s':'Cerrada';
+      document.querySelector('#cuenta-bloqueo').textContent=e.bloqueo_restante_s?e.bloqueo_restante_s+' s · bloqueado':e.fallos_consecutivos+'/3 fallos';
+      document.querySelector('#ventana-secuencia').textContent=String(e.tiempo_abierto_s);
+      document.querySelector('#ultimo').textContent=e.ultimo_resultado+(e.ultimo_uid?' · '+e.ultimo_uid:'');if(idAlSolicitar===capturaId)mostrarCaptura(e.captura);
+      }catch(_){if(capturaId)estadoLectura.textContent='Se perdió la conexión con el lector. Reintentando; la espera vence automáticamente.';}finally{consultando=false;}}
+    setInterval(actualizar,1000);
+  </script>
+</body></html>

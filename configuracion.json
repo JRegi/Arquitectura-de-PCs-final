@@ -1,0 +1,13 @@
+{
+  "gpio_servo": 26,
+  "pulso_cerrado_us": 1000,
+  "pulso_abierto_us": 1500,
+  "tiempo_movimiento_s": 0.6,
+  "tiempo_abierto_s": 5.0,
+  "tiempo_retiro_tarjeta_s": 1.0,
+  "bus_lcd": 3,
+  "direccion_lcd": 39,
+  "gpiochip": 0,
+  "web_host": "0.0.0.0",
+  "web_puerto": 5000
+}

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Diagrama del sistema RFID</title>
+  <style>
+    :root { color-scheme:dark; font-family:system-ui,sans-serif; background:#101318; color:#edf1f7; }
+    body { max-width:1100px; margin:auto; padding:24px; line-height:1.5; }
+    a { color:#8dc3ff; } h1,h2 { line-height:1.2; }
+    .intro { color:#b5c3d4; max-width:78ch; }
+    .stack { display:grid; gap:14px; margin:20px 0; }
+    .pipeline { display:flex; flex-wrap:wrap; align-items:stretch; gap:10px; background:#151b24; border:1px solid #2a3748; border-radius:12px; padding:12px; }
+    .pipeline h3 { flex-basis:100%; font-size:1rem; margin:0 0 2px; color:#d1dcec; }
+    .node { background:#1a2029; border:1px solid #3c5068; border-radius:12px; padding:16px; min-width:0; }
+    .pipeline .node { flex:1 1 0; min-width:0; }
+    .node strong { display:block; color:#9bd0ff; margin-bottom:6px; }
+    .node small { color:#acbad0; display:block; }
+    .arrow { font-weight:700; font-size:1.3rem; color:#8ccaff; align-self:center; text-align:center; }
+    .chip { font-family:ui-monospace,monospace; color:#f2d897; }
+    ol { padding-left:24px; } li { margin:.65em 0; }
+    @media(max-width:650px) { .pipeline { flex-direction:column; } .pipeline .node { flex-basis:auto; } .arrow { transform:rotate(90deg); } }
+  </style>
+</head>
+<body>
+  <p><a href="{{ url_for('inicio') }}">← Volver al panel</a></p>
+  <h1>Cómo funciona el control RFID</h1>
+  <p class="intro">El servicio <span class="chip">acceso-rfid.service</span> mantiene una sola aplicación Python en ejecución. Flask atiende la web en un hilo de ese proceso; el lector y el controlador funcionan en el hilo principal. Los módulos importados son archivos del programa, no procesos separados.</p>
+
+  <h2>Procesos y comunicación</h2>
+  <div class="stack" aria-label="Diagrama de procesos y módulos">
+    <section class="pipeline"><h3>Arranque</h3><div class="node"><strong>systemd: acceso-rfid.service</strong>Inicia y reinicia el servicio.</div><div class="arrow" aria-hidden="true">→</div><div class="node"><strong>acceso_rfid.py · proceso Python</strong>Configura recursos, ejecuta el bucle RFID y arranca Flask en otro hilo.</div></section>
+    <section class="pipeline"><h3>Lectura y decisión</h3><div class="node"><strong>RC522 · SPI</strong>Lee la tarjeta.</div><div class="arrow" aria-hidden="true">→</div><div class="node"><strong>rc522_uid_reader.py</strong>Valida y entrega un UID completo.</div><div class="arrow" aria-hidden="true">→</div><div class="node"><strong>controlador_acceso.py · hilo principal</strong>Decide según modo, padrón y plazos.</div></section>
+    <section class="pipeline"><h3>Configuración persistente</h3><div class="node"><strong>Navegador</strong>Envía cambios y consulta el estado.</div><div class="arrow" aria-hidden="true">↔</div><div class="node"><strong>panel_web.py · hilo Flask</strong>Sirve el panel y la API.</div><div class="arrow" aria-hidden="true">↔</div><div class="node"><strong>padron_rfid.py</strong>Comparte la configuración con el controlador.</div><div class="arrow" aria-hidden="true">↔</div><div class="node"><strong>acceso.sqlite3</strong>Guarda tarjetas, secuencias, modo y tiempo.</div></section>
+    <section class="pipeline"><h3>Estado en vivo y captura</h3><div class="node"><strong>controlador_acceso.py</strong>Publica puerta, lector y resultados; consume las solicitudes de lectura para alta.</div><div class="arrow" aria-hidden="true">↔</div><div class="node"><strong>estado_sistema.py · memoria compartida</strong>Protege los datos con un bloqueo entre hilos.</div><div class="arrow" aria-hidden="true">↔</div><div class="node"><strong>panel_web.py</strong>Responde <span class="chip">/api/estado</span> y recibe la solicitud de captura.</div></section>
+    <section class="pipeline"><h3>Salida física en paralelo</h3><div class="node"><strong>controlador_acceso.py</strong>Ordena texto y movimiento.</div><div class="arrow" aria-hidden="true">→</div><div class="node"><strong>lcd_texto_fijo.py · I²C</strong>Actualiza el LCD con mensaje y cuenta regresiva.</div><div class="node"><strong>servo_puerta.py</strong>Solicita pulsos al proceso local <span class="chip">pigpiod</span> por GPIO26 para mover el SG90.</div></section>
+  </div>
+
+  <h2>Recorrido de una lectura</h2>
+  <ol>
+    <li>El bucle de <span class="chip">acceso_rfid.py</span> lee el RC522 y entrega el UID al controlador.</li>
+    <li>Si hay una captura de alta solicitada desde la web, <span class="chip">estado_sistema.py</span> conserva el UID para el formulario y esa lectura no abre la puerta.</li>
+    <li>El controlador revisa bloqueo, retirada de tarjeta, modo y habilitación en <span class="chip">padron_rfid.py</span>.</li>
+    <li>En <strong>acceso</strong>, una tarjeta habilitada abre. Mientras la puerta está abierta, se ignoran todas las lecturas. Al vencer el tiempo, se cierra; la tarjeta debe haberse retirado antes de iniciar otro ciclo.</li>
+    <li>En <strong>combinación</strong>, solo se aceptan pasos de una secuencia configurada. Cada paso intermedio renueva el plazo privado de espera y mantiene cerrado el servo, sin mostrar avance. El último paso abre y muestra la palabra final. Un paso distinto o tardío reinicia la secuencia.</li>
+    <li>El controlador actualiza el LCD, el servo y <span class="chip">estado_sistema.py</span>. El navegador consulta <span class="chip">/api/estado</span> para reflejar puerta, lector, bloqueo y modo.</li>
+  </ol>
+  <p class="intro">Tres lecturas de UID no registrados bloquean durante 10 segundos. Cambiar de modo cancela una secuencia pendiente y cierra una apertura en curso. El tiempo configurado en el panel se usa tanto para la puerta abierta como para esperar el siguiente paso.</p>
+</body>
+</html>
