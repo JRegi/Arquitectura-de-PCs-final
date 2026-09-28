@@ -1,8 +1,7 @@
 # Demo de acceso: RFID, LCD y servo
 
-Proyecto simplificado por pedido del usuario. El hardware usa exclusivamente
-RC522, LCD 16×2 con backpack PCF8574 y SG90 en GPIO26. No usa teclado, PIN,
-LEDs, buzzer ni relé. Flask sirve el panel y SQLite guarda su padrón.
+El hardware usa exclusivamente RC522, display LCD 16×2 con backpack PCF8574 y servo SG90 en GPIO26.
+Flask sirve el panel y SQLite guarda su padrón.
 
 ## Funcionamiento
 
@@ -41,7 +40,7 @@ El registro guarda solo el UID en SQLite: no modifica la memoria del llavero.
 
 ## Cableado definitivo
 
-Cablear con la alimentación desconectada. Los números GPIO son BCM.
+Los números GPIO son BCM.
 
 | Dispositivo / señal | BCM | Pin físico / alimentación |
 |---|---:|---|
